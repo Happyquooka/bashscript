@@ -1,12 +1,15 @@
 #!/bin/bash
-
-# Exit on any error
 set -e
+bash -n "$0" || { echo "Error: Script syntax error"; exit 1; }
+
+# Set PostgreSQL admin credentials
+export PGPASSWORD=admin
+PSQL="psql -U admin -h localhost -d sample_db"
 
 # Function to check if a user exists
 check_user_exists() {
-    local username=$1
-    if psql -U postgres -t -c "SELECT 1 FROM pg_roles WHERE rolname = '$username';" | grep -q 1; then
+    local username=admin
+    if $PSQL -t -c "SELECT 1 FROM pg_roles WHERE rolname = '$username';" 2>/dev/null | grep -q 1; then
         return 0
     else
         return 1
@@ -28,18 +31,33 @@ create_or_modify_user() {
     read -p "Grant superuser privileges? (y/n): " superuser
     if check_user_exists "$username"; then
         echo "User $username exists. Modifying privileges..."
-        sudo -u postgres psql -c "ALTER ROLE \"$username\" WITH PASSWORD '$password';"
+        $PSQL -c "ALTER ROLE \"$username\" WITH PASSWORD '$password';" 2>/dev/null || {
+            echo "Error: Failed to modify user $username."
+            return 1
+        }
         if [ "$superuser" = "y" ]; then
-            sudo -u postgres psql -c "ALTER ROLE \"$username\" WITH SUPERUSER;"
+            $PSQL -c "ALTER ROLE \"$username\" WITH SUPERUSER;" 2>/dev/null || {
+                echo "Error: Failed to grant superuser privileges."
+                return 1
+            }
         else
-            sudo -u postgres psql -c "ALTER ROLE \"$username\" WITH NOSUPERUSER;"
+            $PSQL -c "ALTER ROLE \"$username\" WITH NOSUPERUSER;" 2>/dev/null || {
+                echo "Error: Failed to revoke superuser privileges."
+                return 1
+            }
         fi
         echo "User $username modified successfully."
     else
         echo "Creating user $username..."
-        sudo -u postgres psql -c "CREATE ROLE \"$username\" WITH LOGIN PASSWORD '$password';"
+        $PSQL -c "CREATE ROLE \"$username\" WITH LOGIN PASSWORD '$password';" 2>/dev/null || {
+            echo "Error: Failed to create user $username."
+            return 1
+        }
         if [ "$superuser" = "y" ]; then
-            sudo -u postgres psql -c "ALTER ROLE \"$username\" WITH SUPERUSER;"
+            $PSQL -c "ALTER ROLE \"$username\" WITH SUPERUSER;" 2>/dev/null || {
+                echo "Error: Failed to grant superuser privileges."
+                return 1
+            }
         fi
         echo "User $username created successfully."
     fi
@@ -54,7 +72,10 @@ check_user() {
     fi
     if check_user_exists "$username"; then
         echo "User $username exists."
-        sudo -u postgres psql -c "\du $username"
+        $PSQL -c "\du $username" 2>/dev/null || {
+            echo "Error: Failed to retrieve user details."
+            return 1
+        }
     else
         echo "User $username does not exist."
     fi
@@ -73,7 +94,10 @@ change_password() {
             echo "Error: Password cannot be empty."
             return 1
         fi
-        sudo -u postgres psql -c "ALTER ROLE \"$username\" WITH PASSWORD '$password';"
+        $PSQL -c "ALTER ROLE \"$username\" WITH PASSWORD '$password';" 2>/dev/null || {
+            echo "Error: Failed to change password for $username."
+            return 1
+        }
         echo "Password for $username changed successfully."
     else
         echo "Error: User $username does not exist."
@@ -89,8 +113,14 @@ lock_user() {
         return 1
     fi
     if check_user_exists "$username"; then
-        sudo -u postgres psql -c "ALTER ROLE \"$username\" WITH NOLOGIN;"
-        sudo -u postgres psql -c "REVOKE CONNECT ON DATABASE sample_db FROM \"$username\";"
+        $PSQL -c "ALTER ROLE \"$username\" WITH NOLOGIN;" 2>/dev/null || {
+            echo "Error: Failed to lock user $username."
+            return 1
+        }
+        $PSQL -c "REVOKE CONNECT ON DATABASE sample_db FROM \"$username\";" 2>/dev/null || {
+            echo "Error: Failed to revoke database access for $username."
+            return 1
+        }
         echo "User $username locked successfully."
     else
         echo "Error: User $username does not exist."
@@ -106,8 +136,14 @@ unlock_user() {
         return 1
     fi
     if check_user_exists "$username"; then
-        sudo -u postgres psql -c "ALTER ROLE \"$username\" WITH LOGIN;"
-        sudo -u postgres psql -c "GRANT CONNECT ON DATABASE sample_db TO \"$username\";"
+        $PSQL -c "ALTER ROLE \"$username\" WITH LOGIN;" 2>/dev/null || {
+            echo "Error: Failed to unlock user $username."
+            return 1
+        }
+        $PSQL -c "GRANT CONNECT ON DATABASE sample_db TO \"$username\";" 2>/dev/null || {
+            echo "Error: Failed to grant database access for $username."
+            return 1
+        }
         echo "User $username unlocked successfully."
     else
         echo "Error: User $username does not exist."
@@ -125,7 +161,10 @@ drop_user() {
     if check_user_exists "$username"; then
         read -p "Are you sure you want to drop user $username? (y/n): " confirm
         if [ "$confirm" = "y" ]; then
-            sudo -u postgres psql -c "DROP ROLE \"$username\";"
+            $PSQL -c "DROP ROLE \"$username\";" 2>/dev/null || {
+                echo "Error: Failed to drop user $username."
+                return 1
+            }
             echo "User $username dropped successfully."
         else
             echo "Operation cancelled."
@@ -147,7 +186,6 @@ while true; do
     echo "6. Drop a user"
     echo "7. Exit"
     read -p "Select an option (1-7): " choice
-
     case $choice in
         1) create_or_modify_user ;;
         2) check_user ;;
@@ -155,7 +193,7 @@ while true; do
         4) lock_user ;;
         5) unlock_user ;;
         6) drop_user ;;
-        7) echo "Exiting..."; exit 0 ;;
+        7) echo "Exiting..."; unset PGPASSWORD; exit 0 ;;
         *) echo "Invalid option. Please select 1-7." ;;
     esac
 done
