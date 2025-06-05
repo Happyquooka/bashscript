@@ -2,6 +2,7 @@
 
 # Exit on any error
 set -e
+sudo su
 
 # Function to check if PostgreSQL is installed
 check_postgresql_installed() {
